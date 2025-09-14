@@ -1,5 +1,5 @@
 # app.py
-# FIRE Strategy Analyzer – Streamlit version (with radar chart for withdrawal strategies)
+# FIRE Strategy Analyzer – Streamlit version with radar chart + your defaults
 
 import streamlit as st
 import numpy as np
@@ -48,18 +48,20 @@ def roth_ladder(inputs):
         "Strategy": "Roth Conversion Ladder",
         "Coverage %": pct_covered,
         "Years Covered": avail / spend if spend > 0 else 0,
+        "Monte Carlo Success %": None,
         "Status": "OK" if avail >= need else "SHORT"
     }
 
 def sepp_72t(inputs):
     pre_tax_total = inputs["balances"]["traditional_401k"] + inputs["balances"]["traditional_ira"]
-    annual_withdraw = 0.04 * pre_tax_total  # simplification
+    annual_withdraw = 0.04 * pre_tax_total
     spend = required(inputs)["spend_at_ret"]
     pct_covered = min(1, annual_withdraw / spend) if spend > 0 else 0
     return {
         "Strategy": "72(t) SEPP",
         "Coverage %": pct_covered,
-        "Years Covered": (annual_withdraw / spend) * 30,  # proxy for 30-year run
+        "Years Covered": (annual_withdraw / spend) * 30 if spend > 0 else 0,
+        "Monte Carlo Success %": None,
         "Status": "OK" if annual_withdraw >= spend else "SHORT"
     }
 
@@ -72,6 +74,7 @@ def taxable_first(inputs):
         "Strategy": "Taxable Drawdown First",
         "Coverage %": pct_covered,
         "Years Covered": years_covered,
+        "Monte Carlo Success %": None,
         "Status": "OK" if years_covered >= 5 else "SHORT"
     }
 
@@ -98,33 +101,35 @@ def monte_carlo(inputs, trials=500, horizon=40):
 st.title("🔥 FIRE Strategy Analyzer")
 st.write("Estimate whether your savings, investments, and withdrawal strategy can support early retirement.")
 
-st.sidebar.header("Inputs")
-current_age = st.sidebar.number_input("Current age", 20, 70, 35)
-target_age = st.sidebar.number_input("Target retirement age", 30, 70, 50)
-expenses = st.sidebar.number_input("Current annual expenses ($)", 10000, 200000, 40000, step=1000)
-desired_expenses = st.sidebar.number_input("Target retirement annual expenses ($)", 10000, 200000, 40000, step=1000)
-income = st.sidebar.number_input("Gross annual income ($)", 20000, 500000, 120000, step=1000)
+st.sidebar.header("Inputs (pre-filled with your data)")
+
+# ========== Defaults from your inputs ==========
+current_age = st.sidebar.number_input("Current age", 20, 70, 31.5)
+target_age = st.sidebar.number_input("Target retirement age", 30, 70, 55)
+expenses = st.sidebar.number_input("Current annual expenses ($)", 10000, 200000, 31000, step=1000)
+desired_expenses = st.sidebar.number_input("Target retirement annual expenses ($)", 10000, 200000, 55000, step=1000)
+income = st.sidebar.number_input("Gross annual income ($)", 20000, 500000, 104000, step=1000)
 
 st.sidebar.subheader("Annual Contributions")
-pre_tax_401k = st.sidebar.number_input("Pre-tax 401(k)", 0, 22500, 15000, step=500)
-roth_ira = st.sidebar.number_input("Roth IRA", 0, 6500, 6000, step=500)
-hsa = st.sidebar.number_input("HSA", 0, 4000, 3650, step=100)
-taxable = st.sidebar.number_input("Taxable investments", 0, 100000, 12000, step=500)
-cash = st.sidebar.number_input("Cash savings", 0, 20000, 2000, step=500)
-employer_match = st.sidebar.number_input("Employer 401(k) match", 0, 10000, 3000, step=500)
+pre_tax_401k = st.sidebar.number_input("Pre-tax 401(k)", 0, 22500, 23500, step=500)
+roth_ira = st.sidebar.number_input("Roth IRA", 0, 6500, 0, step=500)
+hsa = st.sidebar.number_input("HSA", 0, 4000, 0, step=100)
+taxable = st.sidebar.number_input("Taxable investments", 0, 100000, 0, step=500)
+cash = st.sidebar.number_input("Cash savings", 0, 20000, 25000, step=500)
+employer_match = st.sidebar.number_input("Employer 401(k) match", 0, 10000, 3800, step=500)
 
 st.sidebar.subheader("Current Balances")
-bal_trad_401k = st.sidebar.number_input("Traditional 401(k)", 0, 1000000, 80000, step=1000)
-bal_trad_ira = st.sidebar.number_input("Traditional IRA", 0, 1000000, 20000, step=1000)
-bal_roth = st.sidebar.number_input("Roth IRA", 0, 1000000, 15000, step=1000)
-bal_hsa = st.sidebar.number_input("HSA", 0, 100000, 5000, step=500)
-bal_taxable = st.sidebar.number_input("Taxable investments", 0, 1000000, 30000, step=1000)
-bal_cash = st.sidebar.number_input("Cash/emergency fund", 0, 100000, 15000, step=500)
+bal_trad_401k = st.sidebar.number_input("Traditional 401(k)", 0, 1000000, 117000, step=1000)
+bal_trad_ira = st.sidebar.number_input("Traditional IRA", 0, 1000000, 64000, step=1000)
+bal_roth = st.sidebar.number_input("Roth IRA", 0, 1000000, 69000, step=1000)
+bal_hsa = st.sidebar.number_input("HSA", 0, 100000, 23000, step=500)
+bal_taxable = st.sidebar.number_input("Taxable investments", 0, 1000000, 28000, step=1000)
+bal_cash = st.sidebar.number_input("Cash/emergency fund", 0, 100000, 20000, step=500)
 
 st.sidebar.subheader("Assumptions")
 real_return = st.sidebar.slider("Expected real return (%)", 0.0, 10.0, 5.0) / 100
 swr = st.sidebar.slider("Safe withdrawal rate (%)", 2.0, 6.0, 3.5) / 100
-infl = st.sidebar.slider("Inflation rate (%)", 0.0, 5.0, 2.0) / 100
+infl = st.sidebar.slider("Inflation rate (%)", 0.0, 5.0, 3.0) / 100
 bridge_years = st.sidebar.slider("Taxable bridge years for Roth ladder", 0, 10, 3)
 
 inputs = {
@@ -170,7 +175,6 @@ sepp = sepp_72t(inputs)
 taxable_first_result = taxable_first(inputs)
 
 comparison = pd.DataFrame([ladder, sepp, taxable_first_result])
-
 status = "ON TRACK" if proj["nest_egg"] >= reqs["required"]*inputs["safety_margin"] else "UNDER-SAVING"
 
 # ======================
@@ -186,16 +190,36 @@ st.metric("Monte Carlo success rate", f"{mc_prob:.0%}")
 st.subheader("Withdrawal Strategies – Comparison")
 st.dataframe(comparison.set_index("Strategy"))
 
-# Radar Chart
+# Radar Chart with Toggle
 st.subheader("Strategy Robustness Radar Chart")
-labels = ["Coverage %", "Years Covered"]
-strategies = [ladder, sepp, taxable_first_result]
+
+metrics_to_show = st.multiselect(
+    "Select metrics to plot",
+    ["Coverage %", "Years Covered", "Monte Carlo Success %"],
+    default=["Coverage %", "Years Covered"]
+)
+
+labels = metrics_to_show
 angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
 angles += angles[:1]
 
+strategies = [ladder, sepp, taxable_first_result]
+
 fig, ax = plt.subplots(figsize=(6,6), subplot_kw=dict(polar=True))
 for strat in strategies:
-    values = [strat["Coverage %"], strat["Years Covered"]/10]  # normalize Years Covered (10=perfect)
+    values = []
+    for m in metrics_to_show:
+        val = strat[m]
+        # normalize
+        if m == "Coverage %": 
+            val = val
+        elif m == "Years Covered":
+            val = min(1, strat[m]/10)  # normalize at 10 years
+        elif m == "Monte Carlo Success %":
+            val = mc_prob
+        else:
+            val = 0
+        values.append(val)
     values += values[:1]
     ax.plot(angles, values, label=strat["Strategy"])
     ax.fill(angles, values, alpha=0.1)
