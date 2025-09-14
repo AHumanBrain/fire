@@ -1,5 +1,5 @@
 # app.py
-# FIRE Strategy Analyzer – Streamlit version
+# FIRE Strategy Analyzer – Streamlit version (with radar chart for withdrawal strategies)
 
 import streamlit as st
 import numpy as np
@@ -40,20 +40,44 @@ def required(inputs):
 
 def roth_ladder(inputs):
     yrs = years_until(inputs["target_retire_age"], inputs["current_age"])
-    spend = inputs["desired_retirement_expenses"] * ((1+inputs["inflation_rate"])**yrs)
+    spend = required(inputs)["spend_at_ret"]
     need = spend * inputs["taxable_bridge_years_required"]
     avail = inputs["balances"]["taxable_investments"] + inputs["balances"]["cash_emergency"]
+    pct_covered = min(1, avail / need) if need > 0 else 1
     return {
-        "spend_at_ret": spend,
-        "need": need,
-        "avail": avail,
-        "status": "OK" if avail >= need else "SHORT"
+        "Strategy": "Roth Conversion Ladder",
+        "Coverage %": pct_covered,
+        "Years Covered": avail / spend if spend > 0 else 0,
+        "Status": "OK" if avail >= need else "SHORT"
+    }
+
+def sepp_72t(inputs):
+    pre_tax_total = inputs["balances"]["traditional_401k"] + inputs["balances"]["traditional_ira"]
+    annual_withdraw = 0.04 * pre_tax_total  # simplification
+    spend = required(inputs)["spend_at_ret"]
+    pct_covered = min(1, annual_withdraw / spend) if spend > 0 else 0
+    return {
+        "Strategy": "72(t) SEPP",
+        "Coverage %": pct_covered,
+        "Years Covered": (annual_withdraw / spend) * 30,  # proxy for 30-year run
+        "Status": "OK" if annual_withdraw >= spend else "SHORT"
+    }
+
+def taxable_first(inputs):
+    taxable_total = inputs["balances"]["taxable_investments"] + inputs["balances"]["cash_emergency"]
+    spend = required(inputs)["spend_at_ret"]
+    years_covered = taxable_total / spend if spend > 0 else 0
+    pct_covered = min(1, years_covered / 5)  # assume 5 years needed pre-59.5
+    return {
+        "Strategy": "Taxable Drawdown First",
+        "Coverage %": pct_covered,
+        "Years Covered": years_covered,
+        "Status": "OK" if years_covered >= 5 else "SHORT"
     }
 
 def monte_carlo(inputs, trials=500, horizon=40):
     start = project(inputs)["nest_egg"]
     spend = required(inputs)["spend_at_ret"]
-    swr = inputs["safe_withdrawal_rate"]
     annual_spend = spend
     success = 0
     for _ in range(trials):
@@ -75,15 +99,12 @@ st.title("🔥 FIRE Strategy Analyzer")
 st.write("Estimate whether your savings, investments, and withdrawal strategy can support early retirement.")
 
 st.sidebar.header("Inputs")
-
-# Basic demographics
 current_age = st.sidebar.number_input("Current age", 20, 70, 35)
 target_age = st.sidebar.number_input("Target retirement age", 30, 70, 50)
 expenses = st.sidebar.number_input("Current annual expenses ($)", 10000, 200000, 40000, step=1000)
 desired_expenses = st.sidebar.number_input("Target retirement annual expenses ($)", 10000, 200000, 40000, step=1000)
 income = st.sidebar.number_input("Gross annual income ($)", 20000, 500000, 120000, step=1000)
 
-# Contributions
 st.sidebar.subheader("Annual Contributions")
 pre_tax_401k = st.sidebar.number_input("Pre-tax 401(k)", 0, 22500, 15000, step=500)
 roth_ira = st.sidebar.number_input("Roth IRA", 0, 6500, 6000, step=500)
@@ -92,7 +113,6 @@ taxable = st.sidebar.number_input("Taxable investments", 0, 100000, 12000, step=
 cash = st.sidebar.number_input("Cash savings", 0, 20000, 2000, step=500)
 employer_match = st.sidebar.number_input("Employer 401(k) match", 0, 10000, 3000, step=500)
 
-# Current balances
 st.sidebar.subheader("Current Balances")
 bal_trad_401k = st.sidebar.number_input("Traditional 401(k)", 0, 1000000, 80000, step=1000)
 bal_trad_ira = st.sidebar.number_input("Traditional IRA", 0, 1000000, 20000, step=1000)
@@ -101,14 +121,12 @@ bal_hsa = st.sidebar.number_input("HSA", 0, 100000, 5000, step=500)
 bal_taxable = st.sidebar.number_input("Taxable investments", 0, 1000000, 30000, step=1000)
 bal_cash = st.sidebar.number_input("Cash/emergency fund", 0, 100000, 15000, step=500)
 
-# Assumptions
 st.sidebar.subheader("Assumptions")
 real_return = st.sidebar.slider("Expected real return (%)", 0.0, 10.0, 5.0) / 100
 swr = st.sidebar.slider("Safe withdrawal rate (%)", 2.0, 6.0, 3.5) / 100
 infl = st.sidebar.slider("Inflation rate (%)", 0.0, 5.0, 2.0) / 100
 bridge_years = st.sidebar.slider("Taxable bridge years for Roth ladder", 0, 10, 3)
 
-# Bundle inputs
 inputs = {
     "current_age": current_age,
     "target_retire_age": target_age,
@@ -145,22 +163,49 @@ inputs = {
 # ======================
 proj = project(inputs)
 reqs = required(inputs)
-roth = roth_ladder(inputs)
 mc_prob = monte_carlo(inputs, trials=500)
+
+ladder = roth_ladder(inputs)
+sepp = sepp_72t(inputs)
+taxable_first_result = taxable_first(inputs)
+
+comparison = pd.DataFrame([ladder, sepp, taxable_first_result])
 
 status = "ON TRACK" if proj["nest_egg"] >= reqs["required"]*inputs["safety_margin"] else "UNDER-SAVING"
 
+# ======================
+# Output
+# ======================
 st.header("Results")
 st.metric("Years until retirement", proj["years"])
 st.metric("Projected nest egg", f"${proj['nest_egg']:,.0f}")
 st.metric("Required nest egg", f"${reqs['required']:,.0f}")
-st.metric("Status", status)
+st.metric("Overall Status", status)
 st.metric("Monte Carlo success rate", f"{mc_prob:.0%}")
 
-st.subheader("Roth Ladder Bridge")
-st.write(f"Need ${roth['need']:,.0f}, Available ${roth['avail']:,.0f} → {roth['status']}")
+st.subheader("Withdrawal Strategies – Comparison")
+st.dataframe(comparison.set_index("Strategy"))
 
-# Plots
+# Radar Chart
+st.subheader("Strategy Robustness Radar Chart")
+labels = ["Coverage %", "Years Covered"]
+strategies = [ladder, sepp, taxable_first_result]
+angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+angles += angles[:1]
+
+fig, ax = plt.subplots(figsize=(6,6), subplot_kw=dict(polar=True))
+for strat in strategies:
+    values = [strat["Coverage %"], strat["Years Covered"]/10]  # normalize Years Covered (10=perfect)
+    values += values[:1]
+    ax.plot(angles, values, label=strat["Strategy"])
+    ax.fill(angles, values, alpha=0.1)
+ax.set_xticks(angles[:-1])
+ax.set_xticklabels(labels)
+ax.set_yticklabels([])
+ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+st.pyplot(fig)
+
+# Bar Charts
 balances = pd.Series(inputs["balances"])
 st.bar_chart(balances)
 
