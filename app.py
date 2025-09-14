@@ -104,18 +104,18 @@ st.write("Estimate whether your savings, investments, and withdrawal strategy ca
 st.sidebar.header("Inputs (pre-filled with your data)")
 
 # ========== Defaults from your inputs ==========
-current_age = st.sidebar.number_input("Current age", 20, 70, 31.5)
+current_age = st.sidebar.number_input("Current age", 20, 70, 31)
 target_age = st.sidebar.number_input("Target retirement age", 30, 70, 55)
 expenses = st.sidebar.number_input("Current annual expenses ($)", 10000, 200000, 31000, step=1000)
 desired_expenses = st.sidebar.number_input("Target retirement annual expenses ($)", 10000, 200000, 55000, step=1000)
 income = st.sidebar.number_input("Gross annual income ($)", 20000, 500000, 104000, step=1000)
 
 st.sidebar.subheader("Annual Contributions")
-pre_tax_401k = st.sidebar.number_input("Pre-tax 401(k)", 0, 22500, 23500, step=500)
+pre_tax_401k = st.sidebar.number_input("Pre-tax 401(k)", 0, 30000, 23500, step=500)
 roth_ira = st.sidebar.number_input("Roth IRA", 0, 6500, 0, step=500)
 hsa = st.sidebar.number_input("HSA", 0, 4000, 0, step=100)
 taxable = st.sidebar.number_input("Taxable investments", 0, 100000, 0, step=500)
-cash = st.sidebar.number_input("Cash savings", 0, 20000, 25000, step=500)
+cash = st.sidebar.number_input("Cash savings", 0, 50000, 25000, step=500)
 employer_match = st.sidebar.number_input("Employer 401(k) match", 0, 10000, 3800, step=500)
 
 st.sidebar.subheader("Current Balances")
@@ -190,8 +190,10 @@ st.metric("Monte Carlo success rate", f"{mc_prob:.0%}")
 st.subheader("Withdrawal Strategies – Comparison")
 st.dataframe(comparison.set_index("Strategy"))
 
-# Radar Chart with Toggle
-st.subheader("Strategy Robustness Radar Chart")
+# ======================
+# Radar Chart – absolute numbers
+# ======================
+st.subheader("Strategy Robustness Radar Chart (Absolute Values)")
 
 metrics_to_show = st.multiselect(
     "Select metrics to plot",
@@ -206,30 +208,47 @@ angles += angles[:1]
 strategies = [ladder, sepp, taxable_first_result]
 
 fig, ax = plt.subplots(figsize=(6,6), subplot_kw=dict(polar=True))
+
+# Thresholds for reference
+thresholds = {
+    "Coverage %": 100,
+    "Years Covered": 5,  # e.g., minimum needed pre-59.5
+    "Monte Carlo Success %": 100
+}
+
 for strat in strategies:
     values = []
     for m in metrics_to_show:
-        val = strat[m]
-        # normalize
-        if m == "Coverage %": 
-            val = val
+        val = strat.get(m, 0)
+        if m == "Coverage %":
+            val = val * 100
         elif m == "Years Covered":
-            val = min(1, strat[m]/10)  # normalize at 10 years
+            val = val
         elif m == "Monte Carlo Success %":
-            val = mc_prob
-        else:
-            val = 0
+            val = mc_prob * 100 if strat["Strategy"] == "Taxable Drawdown First" else 0
         values.append(val)
     values += values[:1]
-    ax.plot(angles, values, label=strat["Strategy"])
+    ax.plot(angles, values, label=strat["Strategy"], marker='o')
     ax.fill(angles, values, alpha=0.1)
+    # annotate values
+    for angle, val in zip(angles, values):
+        ax.text(angle, val + 0.5, f"{val:.1f}", fontsize=8, ha='center', va='bottom')
+
+# Draw threshold circles
+for m, thresh in thresholds.items():
+    if m in metrics_to_show:
+        ax.plot(angles, [thresh]*len(angles), linestyle='dashed', color='red', alpha=0.3)
+
 ax.set_xticks(angles[:-1])
 ax.set_xticklabels(labels)
-ax.set_yticklabels([])
+ax.set_yticklabels([])  # hide default ticks
+ax.set_title("Withdrawal Strategy Metrics", fontsize=12)
 ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
 st.pyplot(fig)
 
+# ======================
 # Bar Charts
+# ======================
 balances = pd.Series(inputs["balances"])
 st.bar_chart(balances)
 
