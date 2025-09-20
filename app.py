@@ -95,6 +95,33 @@ def monte_carlo(inputs, trials=500, horizon=40):
             success += 1
     return success / trials
 
+def strategy_roth_ladder(inputs):
+    """Check if taxable/cash can cover the 5-year Roth ladder bridge."""
+    spend = required(inputs)["spend_at_ret"]
+    need = spend * inputs["taxable_bridge_years_required"]
+    avail = inputs["balances"]["taxable_investments"] + inputs["balances"]["cash_emergency"]
+    coverage = avail / need if need > 0 else 0
+    years = avail / spend if spend > 0 else 0
+    return coverage, years, "OK" if avail >= need else "SHORT"
+
+def strategy_sepp(inputs):
+    """72(t) Substantially Equal Periodic Payments from Traditional IRA/401k."""
+    spend = required(inputs)["spend_at_ret"]
+    balance = inputs["balances"]["traditional_401k"] + inputs["balances"]["traditional_ira"]
+    # crude 72(t) calc: divide by life expectancy (IRS ~30 yrs for early retirees)
+    sepp_income = balance / 30  
+    coverage = sepp_income / spend
+    years = (balance / spend) if spend > 0 else 0
+    return coverage, years, "OK" if sepp_income >= spend else "SHORT"
+
+def strategy_taxable_drawdown(inputs):
+    """Draw taxable investments/cash until empty."""
+    spend = required(inputs)["spend_at_ret"]
+    avail = inputs["balances"]["taxable_investments"] + inputs["balances"]["cash_emergency"]
+    coverage = avail / spend if spend > 0 else 0
+    years = avail / spend if spend > 0 else 0
+    return coverage, years, "OK" if years >= 5 else "SHORT"  # needs ~5yr bridge
+
 # ======================
 # Streamlit UI
 # ======================
@@ -170,11 +197,37 @@ proj = project(inputs)
 reqs = required(inputs)
 mc_prob = monte_carlo(inputs, trials=500)
 
-ladder = roth_ladder(inputs)
-sepp = sepp_72t(inputs)
-taxable_first_result = taxable_first(inputs)
+# Build withdrawal strategies dynamically
+coverage_rl, years_rl, status_rl = strategy_roth_ladder(inputs)
+coverage_sepp, years_sepp, status_sepp = strategy_sepp(inputs)
+coverage_tax, years_tax, status_tax = strategy_taxable_drawdown(inputs)
 
-comparison = pd.DataFrame([ladder, sepp, taxable_first_result])
+strategies = [
+    {
+        "Strategy": "Roth Conversion Ladder",
+        "Coverage %": coverage_rl,
+        "Years Covered": years_rl,
+        "Monte Carlo Success %": mc_prob,
+        "Status": status_rl
+    },
+    {
+        "Strategy": "72(t) SEPP",
+        "Coverage %": coverage_sepp,
+        "Years Covered": years_sepp,
+        "Monte Carlo Success %": mc_prob,
+        "Status": status_sepp
+    },
+    {
+        "Strategy": "Taxable Drawdown First",
+        "Coverage %": coverage_tax,
+        "Years Covered": years_tax,
+        "Monte Carlo Success %": mc_prob,
+        "Status": status_tax
+    },
+]
+
+df_strategies = pd.DataFrame(strategies)
+
 status = "ON TRACK" if proj["nest_egg"] >= reqs["required"]*inputs["safety_margin"] else "UNDER-SAVING"
 
 # ======================
@@ -188,63 +241,26 @@ st.metric("Overall Status", status)
 st.metric("Monte Carlo success rate", f"{mc_prob:.0%}")
 
 st.subheader("Withdrawal Strategies – Comparison")
-st.dataframe(comparison.set_index("Strategy"))
+st.dataframe(df_strategies.set_index("Strategy"), use_container_width=True)
 
 # ======================
-# Radar Chart – absolute numbers
+# Strategy Comparison Bar Chart
 # ======================
-st.subheader("Strategy Robustness Radar Chart (Absolute Values)")
+st.subheader("Strategy Metrics Comparison")
 
-metrics_to_show = st.multiselect(
-    "Select metrics to plot",
-    ["Coverage %", "Years Covered", "Monte Carlo Success %"],
-    default=["Coverage %", "Years Covered"]
-)
+# Convert Coverage % and Monte Carlo Success % into % scale
+df_plot = df_strategies.copy()
+df_plot["Coverage %"] = df_plot["Coverage %"] * 100
+df_plot["Monte Carlo Success %"] = df_plot["Monte Carlo Success %"] * 100
 
-labels = metrics_to_show
-angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
-angles += angles[:1]
+# Melt to long format for easier plotting
+df_melted = df_plot.melt(id_vars="Strategy", 
+                         value_vars=["Coverage %", "Years Covered", "Monte Carlo Success %"],
+                         var_name="Metric", value_name="Value")
 
-strategies = [ladder, sepp, taxable_first_result]
+st.bar_chart(df_melted, x="Strategy", y="Value", color="Metric")
 
-fig, ax = plt.subplots(figsize=(6,6), subplot_kw=dict(polar=True))
 
-# Thresholds for reference
-thresholds = {
-    "Coverage %": 100,
-    "Years Covered": 5,  # e.g., minimum needed pre-59.5
-    "Monte Carlo Success %": 100
-}
-
-for strat in strategies:
-    values = []
-    for m in metrics_to_show:
-        val = strat.get(m, 0)
-        if m == "Coverage %":
-            val = val * 100
-        elif m == "Years Covered":
-            val = val
-        elif m == "Monte Carlo Success %":
-            val = mc_prob * 100 if strat["Strategy"] == "Taxable Drawdown First" else 0
-        values.append(val)
-    values += values[:1]
-    ax.plot(angles, values, label=strat["Strategy"], marker='o')
-    ax.fill(angles, values, alpha=0.1)
-    # annotate values
-    for angle, val in zip(angles, values):
-        ax.text(angle, val + 0.5, f"{val:.1f}", fontsize=8, ha='center', va='bottom')
-
-# Draw threshold circles
-for m, thresh in thresholds.items():
-    if m in metrics_to_show:
-        ax.plot(angles, [thresh]*len(angles), linestyle='dashed', color='red', alpha=0.3)
-
-ax.set_xticks(angles[:-1])
-ax.set_xticklabels(labels)
-ax.set_yticklabels([])  # hide default ticks
-ax.set_title("Withdrawal Strategy Metrics", fontsize=12)
-ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
-st.pyplot(fig)
 
 # ======================
 # Bar Charts
